@@ -1,0 +1,74 @@
+name: Deploy Forest House Web Playtest
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: forest-house-playtest
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deployment repository
+        uses: actions/checkout@v6
+
+      - name: Checkout private game source
+        uses: actions/checkout@v6
+        with:
+          repository: WendrikyCruz/forest-house
+          ref: playtest/mobile
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: game
+
+      - name: Download Godot 4.6 and export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            --output "${RUNNER_TEMP}/godot.zip" \
+            "https://github.com/godotengine/godot/releases/download/4.6-stable/Godot_v4.6-stable_linux.x86_64.zip"
+          curl --fail --location --retry 3 \
+            --output "${RUNNER_TEMP}/godot-templates.tpz" \
+            "https://github.com/godotengine/godot/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot.zip" -d "${RUNNER_TEMP}/godot"
+          unzip -q "${RUNNER_TEMP}/godot-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          mkdir -p "${HOME}/.local/share/godot/export_templates/4.6.stable"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." \
+            "${HOME}/.local/share/godot/export_templates/4.6.stable/"
+          chmod +x "${RUNNER_TEMP}/godot/Godot_v4.6-stable_linux.x86_64"
+          echo "GODOT_BIN=${RUNNER_TEMP}/godot/Godot_v4.6-stable_linux.x86_64" >> "${GITHUB_ENV}"
+
+      - name: Export game for Web
+        shell: bash
+        run: |
+          source_sha="$(git -C game rev-parse HEAD)"
+          GITHUB_SHA="${source_sha}" bash game/tools/export_web.sh "${GITHUB_WORKSPACE}/build/web"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Web build
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
